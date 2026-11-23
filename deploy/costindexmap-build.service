@@ -1,0 +1,11 @@
+[Unit]
+Description=Incremental rebuild of the cost index map data (fuzzwork costindexmap)
+After=mariadb.service
+OnFailure=discord-notify@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/php /home/web/fuzzwork/htdocs/costindexmap/build.php
+TimeoutStartSec=30min
+Nice=10
+IOSchedulingClass=idle

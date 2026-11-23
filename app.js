@@ -42,20 +42,12 @@ function setStatus(msg, isError = false) {
   el.classList.toggle('error', isError);
 }
 
-async function loadBin(url, label) {
-  setStatus(`Loading ${label}…`);
-  const r = await fetch(`${url}?v=${VERSION}`);
+// Year files have content-hashed names and are fetched as-is (cacheable
+// forever); only meta.bin carries the build version.
+async function loadBin(url) {
+  const r = await fetch(url);
   if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
-  const total = +r.headers.get('Content-Length') || 0;
-  let got = 0;
-  const progress = new TransformStream({
-    transform(chunk, ctl) {
-      got += chunk.byteLength;
-      if (total) setStatus(`Loading ${label}… ${Math.round(got / total * 100)}%`);
-      ctl.enqueue(chunk);
-    },
-  });
-  const raw = new Uint8Array(await new Response(r.body.pipeThrough(progress)).arrayBuffer());
+  const raw = new Uint8Array(await r.arrayBuffer());
   // Files are gzip; a server that already decoded them (Content-Encoding) is fine too.
   if (raw[0] !== 0x1f || raw[1] !== 0x8b) return raw;
   const ds = new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'));
@@ -324,14 +316,25 @@ async function loadActivity(id) {
   S.activity = id;
   let entry = S.cache.get(id);
   if (!entry) {
-    const name = S.meta.activities.find((a) => a.id === id)?.name ?? id;
-    const data = await loadBin(`data/ci-${id}.bin`, name.toLowerCase());
-    if (data.length !== S.N * S.D) throw new Error(`ci-${id}.bin: expected ${S.N * S.D} bytes, got ${data.length}`);
-    // Undo the per-day XOR delta from build.php.
-    const N = S.N;
-    for (let k = N; k < data.length; k++) data[k] ^= data[k - N];
-    const tex = device.createTexture({ size: [S.N, S.D], format: 'r8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
-    device.queue.writeTexture({ texture: tex }, data, { bytesPerRow: S.N, rowsPerImage: S.D }, [S.N, S.D]);
+    const label = (S.meta.activities.find((a) => a.id === id)?.name ?? String(id)).toLowerCase();
+    const N = S.N, years = S.meta.years;
+    const data = new Uint8Array(N * S.D);
+    const tex = device.createTexture({ size: [N, S.D], format: 'r8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    let done = 0;
+    setStatus(`Loading ${label}… 0/${years.length}`);
+    // One file per calendar year; each fills rows start..start+days-1. A year
+    // built before systems were added is narrower: its missing columns stay 0.
+    await Promise.all(years.map(async (y) => {
+      const file = y.files[id];
+      const W = y.width, rows = y.days;
+      const raw = await loadBin(`data/${file}`);
+      if (raw.length !== W * rows || W > N) throw new Error(`${file}: expected ${W}×${rows} bytes (of ${N} columns), got ${raw.length}`);
+      for (let k = W; k < raw.length; k++) raw[k] ^= raw[k - W];   // undo the per-day XOR
+      if (W === N) data.set(raw, y.start * N);
+      else for (let r = 0; r < rows; r++) data.set(raw.subarray(r * W, (r + 1) * W), (y.start + r) * N);
+      device.queue.writeTexture({ texture: tex, origin: [0, y.start, 0] }, raw, { bytesPerRow: W, rowsPerImage: rows }, [W, rows]);
+      setStatus(`Loading ${label}… ${++done}/${years.length}`);
+    }));
     const bind = device.createBindGroup({
       layout: bindLayout,
       entries: [
@@ -855,7 +858,9 @@ function fatal(err) {
 
 // ---------------------------------------------------------------- boot
 async function main() {
-  const meta = JSON.parse(new TextDecoder().decode(await loadBin('data/meta.bin', 'map')));
+  setStatus('Loading map…');
+  const meta = JSON.parse(new TextDecoder().decode(await loadBin(`data/meta.bin?v=${VERSION}`)));
+  if (meta.format !== 2) throw new Error('The map data is being rebuilt. Try again in a few minutes.');
   S.meta = meta;
   S.N = meta.systems.id.length;
   S.D = meta.days;

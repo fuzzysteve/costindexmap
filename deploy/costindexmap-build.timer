@@ -1,0 +1,9 @@
+[Unit]
+Description=Rebuild the cost index map data nightly, after the 18:30 UTC archive snapshot
+
+[Timer]
+OnCalendar=*-*-* 19:15:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -6,9 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 An animated WebGPU heatmap of `evesupport.costIndexArchive` (daily industry cost index snapshots since 2014-07-25), served by Apache + PHP-FPM as part of the fuzzwork site. There is no package manager, bundler or test suite. Public repo: <https://github.com/fuzzysteve/costindexmap> (`data/` and `db.inc.php` are gitignored). See `README.md` for the user-facing description and the data file format.
 
-- `index.php`: page shell. Its only PHP job is emitting `?v=<filemtime>` on `app.js`/`style.css` and `window.CIMAP.dataVersion` (mtime of `data/meta.bin`), which versions the data URLs.
+- `index.php`: page shell. Its only PHP job is emitting `?v=<filemtime>` on `app.js`/`style.css` and `window.CIMAP.dataVersion` (mtime of `data/meta.bin`), which versions the `meta.bin` URL. Year files are **not** versioned that way: their names carry a content hash, so they're fetched without `?v=` and cached forever.
 - `app.js`: everything client-side, as one ES module: data loading, the WebGPU pipelines (WGSL is a template string inside it), camera, input, labels, panels.
-- `build.php`: CLI-only. Reads the archive and the SDE map tables and writes `data/*.bin`. The page never queries the DB. It must never be web-reachable; see "Keeping build.php off the web".
+- `build.php`: CLI-only. Reads the archive and the SDE map tables and writes `data/meta.bin` plus one file per activity per calendar year. Incremental by default. The page never queries the DB. It must never be web-reachable; see "Keeping build.php off the web".
+- `deploy/`: `costindexmap-build.service`/`.timer`, installed as copies in `/etc/systemd/system/` (copy them again after editing). The timer runs nightly at 19:15 UTC, 45 min after the 18:30 UTC archive snapshot; Discord alerts on failure.
 - `db.inc.php`: just `require`s `../api/db.inc.php` (PDO `$dbh`, the same connection the api tools use). Don't copy credentials here.
 
 ## Raw data exports
@@ -21,11 +22,14 @@ The exact, unrounded archive is published as monthly CSVs, separate from this ma
 
 ## Running and checking
 
-- Rebuild the data: `php build.php` (about 4 min; prints row/skip/clamp counts). **If it reports any `clamped` rows, the values have outgrown `VMIN`/`VMAX`**: widen them in `build.php` (the page reads them from `meta.bin`, so nothing else needs changing).
+- Update the data: `php build.php` (incremental, ~7 s: re-reads the last built day plus newer ones and rewrites the current year). `--full` rebuilds everything (~3 min table scan). `--since YYYY-MM-DD` re-reads from a date. Unknown arguments exit 2 without building. A `flock` on `data/.build.lock` stops two builds overlapping.
+- The incremental build switches to a full one by itself if `meta.bin` is missing or its `format`, `vmin`/`vmax`, `start` or activity list differ from `build.php`. So after changing any of those, a plain `php build.php` does the right thing.
+- **If a build reports any `clamped` rows, the values have outgrown `VMIN`/`VMAX`**. It exits 3, which triggers the Discord alert. Widen them in `build.php` and run it (the change forces a full build; the page reads the scale from `meta.bin`).
+- Reading through the `archiveTime` index costs ~70 s per million rows (random primary-key lookups), while a table scan reads all 139M rows in ~2.5 min. That's why the build uses `IGNORE INDEX (cia_at)` for ranges over 120 days.
 - Syntax checks, the only automated checking: `php -l build.php index.php`, `node --check app.js`.
 - The site answers on `www.fuzzwork.co.uk` (the bare domain 302s to it). From this server: `curl -sk --resolve www.fuzzwork.co.uk:443:127.0.0.1 https://www.fuzzwork.co.uk/costindexmap/`.
-- `.htaccess` rules **never apply to `*.php`** on this vhost: `ProxyPassMatch` sends them straight to PHP-FPM. `.htaccess` does work for other files: it sets `no-gzip` plus a cache header on `*.bin`.
-- `build.php` ignores command-line arguments: **any** `php build.php` starts a full ~4 min build that rewrites `data/`. Don't run it just to test that it starts.
+- `.htaccess` rules **never apply to `*.php`** on this vhost: `ProxyPassMatch` sends them straight to PHP-FPM. `.htaccess` does work for other files: it sets `no-gzip` on `*.bin`, `max-age=1y, immutable` on the hashed year files, and 1 day on `meta.bin`.
+- To test the incremental path safely, copy `build.php` to a scratch directory with a `db.inc.php` that `require`s the absolute path of `../api/db.inc.php` and its own `data/`. A correct incremental build gives files byte-identical to `--full` (same content-hash names), which makes a good regression check.
 
 ### Keeping build.php off the web
 
@@ -49,7 +53,9 @@ Use `chromium --headless=new --no-sandbox --enable-unsafe-webgpu --enable-featur
 ## Invariants (keep in sync)
 
 - **Byte encoding**: `build.php` (`VMIN`, `VMAX`, `1 + round((ln v - ln VMIN) * 254 / ln(VMAX/VMIN))`, 0 = no data) ↔ `qToValue`/`valueToN` in `app.js` ↔ `level()` in the WGSL (`(q - 1) / 254`). The page reads `vmin`/`vmax` from `meta.bin`; don't hard-code them in JS.
-- **Grid layout**: `ci-*.bin` is day-major (`day * N + system`), XOR-delta per row. `loadActivity` undoes the delta in place and uploads one `r8unorm` texture of `N × D` (systems × days). The WebGPU default `maxTextureDimension2D` is 8192, and D reaches 8192 around January 2037; `initGpu` checks the adapter limit.
+- **Grid layout**: each activity is split into calendar-year files (`meta.years[]`: `year`, `start` day, `days`, `width`, `files{activity: name}`). Each file is day-major (`row * width + column`), with every row XORed with the previous one (the first with zeros). `loadActivity` fetches the years in parallel, undoes the XOR, copies each into the CPU array (`data`, `N × D`) and uploads it into one `r8unorm` texture at `origin.y = start`. The WebGPU default `maxTextureDimension2D` is 8192, and D reaches 8192 around January 2037; `initGpu` checks the adapter limit.
+- **Columns only grow**: system order is the previous build's order with new SDE systems appended, so finished years never need rebuilding. A year file can therefore be narrower than `N`; build (`readChunk` pads) and page (row-by-row copy) both treat missing columns as "no data". Never reorder columns without `--full`. Systems that leave the SDE keep their column and last known details.
+- **Names are content hashes** (`ci-<act>-<year>-<sha256:12>.bin`), so a file under a given name never changes. `meta.bin` is written last; files that are no longer referenced are deleted 2 days later, so a page that loaded the previous `meta.bin` can still fetch everything it needs.
 - **Uniform buffer**: the WGSL `struct U` ↔ the offsets written in `render()` (`uf`/`uu`/`ui` views over one 112-byte `ArrayBuffer`: vp 0–15, viewport 16–17, day0/day1 18–19, frac 20, size 21, sel/hov 22–23, gain 24, lineGain 25, tLo/tHi 26–27).
 - **Coordinates**: positions are SDE metres / 9.4607e15 (light years) with z negated (`build.php`), so with yaw 0 the view has EVE's map orientation (x east, z north). Camera is an orbit camera (`target`, `dist`, `yaw`, `pitch`); `pitch` is clamped short of straight down because `lookAt` uses world-up.
 - **Colour**: `INFERNO` stops are shared by the WGSL `ramp()` and the CSS legend/sparkline (`rampCss`), both offset by `RAMP_FLOOR` so the lowest values stay visible on the dark background. The display range is `SHOW_MIN`–`SHOW_MAX` (0.05%–20%), separate from the encoding range.
@@ -69,4 +75,4 @@ Use `chromium --headless=new --no-sandbox --enable-unsafe-webgpu --enable-featur
 - Monthly CSV exports: see "Raw data exports" above. The script's systemd unit files are kept next to it.
 - Full SQL export (zstd) of the table: `/home/web/backups/costIndexArchive-20261123.sql.zst`, copied to OneDrive at `fuzzwork:server-backups/costIndexArchive/`. `evesupport` is deliberately not in the nightly off-site backup (`/home/scripts/backup/offsite-backup.sh`).
 - When streaming big MariaDB result sets into a slow consumer, raise `net_write_timeout` or write to disk first: the server's 60s default killed an earlier export mid-table.
-- The map data is **not** rebuilt automatically. It only changes when someone runs `php build.php`.
+- The map data is rebuilt every night by `costindexmap-build.timer` (incremental, seconds).

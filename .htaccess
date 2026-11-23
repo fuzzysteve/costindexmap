@@ -11,9 +11,15 @@
     Require all denied
 </FilesMatch>
 
-# Data files are already gzip-compressed (the page decompresses them itself),
-# and URLs are versioned by build time.
+# Data files are already gzip-compressed (the page decompresses them itself).
 <FilesMatch "\.bin$">
     SetEnv no-gzip 1
-    Header set Cache-Control "public, max-age=86400"
 </FilesMatch>
+# Year files have a content hash in their name, so they never change.
+<FilesMatch "^ci-.+-[0-9a-f]+\.bin$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+</FilesMatch>
+# meta.bin is requested as meta.bin?v=<build time>.
+<Files "meta.bin">
+    Header set Cache-Control "public, max-age=86400"
+</Files>
