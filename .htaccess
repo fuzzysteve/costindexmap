@@ -1,6 +1,15 @@
-# Note: rules here never apply to *.php on this vhost (ProxyPassMatch sends them
-# straight to PHP-FPM). build.php guards itself (CLI only, 404 otherwise) and
-# db.inc.php produces no output.
+# build.php is CLI-only and db.inc.php is an include: neither should be
+# reachable over the web. build.php also refuses to run outside the CLI.
+#
+# This rule works under mod_php or a SetHandler-based PHP-FPM setup. It does
+# NOT apply if PHP is wired up with ProxyPassMatch (Apache never reads
+# .htaccess for those requests); there, deny these in the vhost, e.g.
+#   <LocationMatch "^/costindexmap/(build|db\.inc)\.php">
+#       Require all denied
+#   </LocationMatch>
+<FilesMatch "^(build\.php|db\.inc\.php)$">
+    Require all denied
+</FilesMatch>
 
 # Data files are already gzip-compressed (the page decompresses them itself),
 # and URLs are versioned by build time.

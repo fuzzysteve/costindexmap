@@ -43,6 +43,12 @@ calendar month (UTC) since July 2014, each with an MD5 checksum. Columns:
    [monthly cost index CSVs](https://www.fuzzwork.co.uk/dump/costindex/) the
    latter (columns `solarSystemID, activityID, costIndex, archiveTime`).
 3. Run `php build.php` to create `data/`.
+4. Make sure `build.php` and `db.inc.php` can't be requested over the web. The
+   included `.htaccess` denies them, but only if your PHP setup honours
+   `.htaccess` for `.php` files. With `ProxyPassMatch` to PHP-FPM it doesn't,
+   so add the `<LocationMatch>` from the comment in `.htaccess` to your vhost.
+   `build.php` also refuses to run outside the command line (it returns 404),
+   so this is a second layer, not the only one.
 
 `.htaccess` sends `data/*.bin` without extra compression, since they're already
 gzipped. If your server compresses `application/octet-stream`, the page still

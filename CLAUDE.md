@@ -8,7 +8,7 @@ An animated WebGPU heatmap of `evesupport.costIndexArchive` (daily industry cost
 
 - `index.php`: page shell. Its only PHP job is emitting `?v=<filemtime>` on `app.js`/`style.css` and `window.CIMAP.dataVersion` (mtime of `data/meta.bin`), which versions the data URLs.
 - `app.js`: everything client-side, as one ES module: data loading, the WebGPU pipelines (WGSL is a template string inside it), camera, input, labels, panels.
-- `build.php`: CLI-only (returns 404 under FPM). Reads the archive and the SDE map tables and writes `data/*.bin`. The page never queries the DB.
+- `build.php`: CLI-only. Reads the archive and the SDE map tables and writes `data/*.bin`. The page never queries the DB. It must never be web-reachable; see "Keeping build.php off the web".
 - `db.inc.php`: just `require`s `../api/db.inc.php` (PDO `$dbh`, the same connection the api tools use). Don't copy credentials here.
 
 ## Raw data exports
@@ -24,7 +24,17 @@ The exact, unrounded archive is published as monthly CSVs, separate from this ma
 - Rebuild the data: `php build.php` (about 4 min; prints row/skip/clamp counts). **If it reports any `clamped` rows, the values have outgrown `VMIN`/`VMAX`**: widen them in `build.php` (the page reads them from `meta.bin`, so nothing else needs changing).
 - Syntax checks, the only automated checking: `php -l build.php index.php`, `node --check app.js`.
 - The site answers on `www.fuzzwork.co.uk` (the bare domain 302s to it). From this server: `curl -sk --resolve www.fuzzwork.co.uk:443:127.0.0.1 https://www.fuzzwork.co.uk/costindexmap/`.
-- `.htaccess` rules **never apply to `*.php`** on this vhost: `ProxyPassMatch` sends them straight to PHP-FPM. That's why `build.php` guards itself with a `PHP_SAPI` check. `.htaccess` does work for other files: it sets `no-gzip` plus a cache header on `*.bin`.
+- `.htaccess` rules **never apply to `*.php`** on this vhost: `ProxyPassMatch` sends them straight to PHP-FPM. `.htaccess` does work for other files: it sets `no-gzip` plus a cache header on `*.bin`.
+- `build.php` ignores command-line arguments: **any** `php build.php` starts a full ~4 min build that rewrites `data/`. Don't run it just to test that it starts.
+
+### Keeping build.php off the web
+
+Three layers, so no single mistake exposes it:
+1. **Vhost (what actually protects this server):** a `<LocationMatch "^/costindexmap/(build|db\.inc)\.php">` / `Require all denied` block just before the `.php` `ProxyPassMatch` in `/etc/apache2/sites-available/fuzzwork.conf`, mirrored in `/home/web/conf/servers/fuzzwork.conf`. Apache answers 403 before PHP-FPM is involved.
+2. **`build.php` itself:** its first statement returns 404 unless `PHP_SAPI === 'cli'`. Keep that check first; nothing may run before it.
+3. **`.htaccess` `FilesMatch` deny:** for other deployments (mod_php or SetHandler FPM). It does nothing here.
+
+Check after any vhost change: `curl -sk --resolve www.fuzzwork.co.uk:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://www.fuzzwork.co.uk/costindexmap/build.php` must print 403. Also try `build.php/x`, `%62uild.php` and POST.
 - Opcache revalidates every 2s, so PHP edits show up almost immediately.
 
 ### Testing in headless Chromium
