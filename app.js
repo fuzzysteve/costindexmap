@@ -14,6 +14,17 @@ const INFERNO = ['#000004', '#160b39', '#420a68', '#6a176e', '#932667', '#bc3754
   '#dd513a', '#f37819', '#fca50a', '#f6d746', '#fcffa4'];
 // The dimmest part of inferno vanishes on the background, so points start here.
 const RAMP_FLOOR = 0.14;
+// From the 2023-09-12 patch ("We have adjusted the System Cost Index formula to
+// make it more volatile") every index is floored at 0.14%, and most quiet
+// systems sit exactly on it. Those values get a label and an optional fade.
+const FLOOR_VALUE = 0.0014;
+// Marked on the timeline and sparkline. The first entry also sets the floor date.
+const EVENTS = [{
+  date: '2023-09-12',
+  title: 'Patch 2023-09-12: System Cost Index formula changed; indices floor at 0.14%',
+  short: 'SCI change, 0.14% min',
+  url: 'https://www.eveonline.com/news/view/patch-notes-version-21-05-2',
+}];
 
 // ---------------------------------------------------------------- state
 const S = {
@@ -27,12 +38,13 @@ const S = {
   fly: null,
   sel: -1, hov: -1,
   showGates: true, showLabels: true, loop: false, glow: 1,
+  fadeFloor: true, floorQ: -1, floorDay: 0,
   dirty: true, lastDay: -1,
   vp: new Float32Array(16), basis: null,
   cssW: 1, cssH: 1, dpr: 1,
 };
 let device, ctx, format, uniformBuf, posBuf, edgeBuf, edgeCount = 0, bindLayout, ptsPipe, linePipe;
-const ub = new ArrayBuffer(112);
+const ub = new ArrayBuffer(128);
 const uf = new Float32Array(ub), uu = new Uint32Array(ub), ui = new Int32Array(ub);
 
 // ---------------------------------------------------------------- helpers
@@ -66,6 +78,7 @@ const valueToN = (v) => (Math.log(v) - LN_MIN) / LN_SPAN;          // 0..1 in by
 const tLo = () => valueToN(SHOW_MIN), tHi = () => valueToN(SHOW_MAX);
 const valueToT = (v) => clamp((valueToN(v) - tLo()) / (tHi() - tLo()), 0, 1);
 const fmtPct = (v) => (v == null ? '—' : `${(v * 100).toFixed(v < 0.01 ? 2 : 1)}%`);
+const dayOfDate = (ymd) => Math.round((Date.parse(`${ymd}T00:00:00Z`) - S.start) / 86400000);
 
 function rampCss(t) {
   const x = clamp(RAMP_FLOOR + (1 - RAMP_FLOOR) * t, 0, 1) * 10;
@@ -149,6 +162,10 @@ struct U {
   lineGain: f32,
   tLo: f32,
   tHi: f32,
+  floorQ: f32,     // byte value of the 0.14% minimum
+  floorDay: u32,   // first day the minimum applies
+  fade: f32,       // 1 = fade systems sitting on it
+  _pad: f32,
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var<storage, read> pos: array<f32>;
@@ -171,15 +188,18 @@ fn sysPos(i: u32) -> vec3f {
   return vec3f(pos[i * 3u], pos[i * 3u + 1u], pos[i * 3u + 2u]);
 }
 
-// (t, hasData): t is the 0..1 colour-scale position, interpolated between days.
-fn level(i: u32) -> vec2f {
+// (t, hasData, atFloor): t is the 0..1 colour-scale position; atFloor is how
+// much of the value sits on the post-patch 0.14% minimum. Both interpolate between days.
+fn level(i: u32) -> vec3f {
   let a = textureLoad(tex, vec2u(i, u.day0), 0).r * 255.0;
   let b = textureLoad(tex, vec2u(i, u.day1), 0).r * 255.0;
-  if (a < 0.5 && b < 0.5) { return vec2f(0.0, 0.0); }
+  if (a < 0.5 && b < 0.5) { return vec3f(0.0, 0.0, 0.0); }
   let qa = select(a, b, a < 0.5);
   let qb = select(b, a, b < 0.5);
   let n = (mix(qa, qb, u.frac) - 1.0) / 254.0;
-  return vec2f(clamp((n - u.tLo) / (u.tHi - u.tLo), 0.0, 1.0), 1.0);
+  let fa = select(0.0, 1.0, abs(qa - u.floorQ) < 0.5 && u.day0 >= u.floorDay);
+  let fb = select(0.0, 1.0, abs(qb - u.floorQ) < 0.5 && u.day1 >= u.floorDay);
+  return vec3f(clamp((n - u.tLo) / (u.tHi - u.tLo), 0.0, 1.0), 1.0, mix(fa, fb, u.frac));
 }
 
 struct PO {
@@ -188,6 +208,7 @@ struct PO {
   @location(1) t: f32,
   @location(2) has: f32,
   @location(3) hl: f32,
+  @location(4) fl: f32,
 };
 
 @vertex fn vsPts(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> PO {
@@ -197,6 +218,8 @@ struct PO {
   let lv = level(ii);
   let clip = u.vp * vec4f(sysPos(ii), 1.0);
   var sz = u.size * select(0.5, 0.75 + 2.6 * lv.x * lv.x, lv.y > 0.5);
+  let fl = lv.z * u.fade;
+  sz = mix(sz, u.size * 0.42, fl);
   var hl = 0.0;
   if (i32(ii) == u.sel || i32(ii) == u.hov) {
     sz = max(sz * 1.5, u.size * 2.6);
@@ -209,6 +232,7 @@ struct PO {
   o.t = lv.x;
   o.has = lv.y;
   o.hl = hl;
+  o.fl = fl;
   return o;
 }
 
@@ -218,6 +242,7 @@ struct PO {
   if (i.hl > 0.5 && r2 > 0.78) { return vec4f(0.85, 0.9, 1.0, 1.0); }
   let a = exp(-r2 * 4.5);
   var col = ramp(i.t) * (0.45 + 0.75 * i.t);
+  col = mix(col, vec3f(0.11, 0.07, 0.17), i.fl);   // at the 0.14% minimum: dim purple
   if (i.has < 0.5) { col = vec3f(0.12, 0.13, 0.16); }
   return vec4f(col * a * u.gain, 1.0);
 }
@@ -359,6 +384,9 @@ async function loadActivity(id) {
 const dayIndex = () => clamp(Math.floor(S.t), 0, S.D - 1);
 function valueAt(sys, day = dayIndex()) {
   return S.act ? qToValue(S.act.data[day * S.N + sys]) : null;
+}
+function atFloor(sys, day = dayIndex()) {
+  return !!S.act && day >= S.floorDay && S.act.data[day * S.N + sys] === S.floorQ;
 }
 
 // ---------------------------------------------------------------- camera
@@ -548,7 +576,8 @@ function setHover(i, cx, cy) {
   if (i < 0) { tip.hidden = true; return; }
   const m = S.meta.systems;
   tip.innerHTML = `<b>${esc(m.name[i])}</b> <span class="muted">${m.sec[i].toFixed(1)} · ${esc(S.regionNames[S.regionOf[i]])}</span><br>` +
-    `<span class="v">${fmtPct(valueAt(i))}</span> <span class="muted">${esc(actName())}, ${dayDate(dayIndex())}</span>`;
+    `<span class="v">${fmtPct(valueAt(i))}</span>${atFloor(i) ? ' <span class="muted">(game minimum)</span>' : ''} ` +
+    `<span class="muted">${esc(actName())}, ${dayDate(dayIndex())}</span>`;
   tip.hidden = false;
   const r = tip.getBoundingClientRect();
   tip.style.left = `${clamp(cx + 14, 4, S.cssW - r.width - 4)}px`;
@@ -572,7 +601,8 @@ function selectSystem(i) {
 
 function updateInfoValue() {
   if (S.sel < 0) return;
-  $('infoValue').textContent = `${fmtPct(valueAt(S.sel))} ${actName().toLowerCase()}`;
+  $('infoValue').innerHTML = `${fmtPct(valueAt(S.sel))} ${esc(actName().toLowerCase())}` +
+    (atFloor(S.sel) ? '<span class="note">game minimum since the 2023-09-12 patch</span>' : '');
 }
 
 // Sparkline: full history of the selected system, with a marker for the current day.
@@ -612,6 +642,8 @@ function drawSpark(rebuild) {
   const g = cv.getContext('2d');
   g.clearRect(0, 0, w, h);
   g.drawImage(sparkBase, 0, 0);
+  g.fillStyle = 'rgba(252,165,10,0.8)';   // events, drawn over the bars
+  for (const ev of EVENTS) g.fillRect(Math.floor(dayOfDate(ev.date) / S.D * w), 0, Math.max(1, dpr), h);
   const x = Math.floor(S.t / S.D * w);
   g.fillStyle = '#ffffff';
   g.fillRect(x, 0, Math.max(1, dpr), h);
@@ -733,6 +765,11 @@ let topTimer = 0;
 function onDayChange(d, now) {
   $('date').textContent = dayDate(d);
   $('gap').hidden = !S.missing.has(d);
+  // For a while after a marked event, link to what changed.
+  const ev = EVENTS.find((e) => d >= dayOfDate(e.date) && d < dayOfDate(e.date) + 60);
+  const evEl = $('event');
+  evEl.hidden = !ev;
+  if (ev) { evEl.textContent = `${ev.short} ↗`; evEl.href = ev.url; evEl.title = ev.title; }
   if (document.activeElement !== $('timeline')) $('timeline').value = d;
   updateInfoValue();
   if (S.sel >= 0) drawSpark(false);
@@ -778,6 +815,7 @@ function render(d0, d1, frac) {
   uf[24] = S.glow * clamp(Math.sqrt(S.cam.dist / 40), 0.55, 1.2);
   uf[25] = S.showGates ? clamp(1.6 - S.cam.dist / 200, 0.5, 1.4) : 0;
   uf[26] = tLo(); uf[27] = tHi();
+  uf[28] = S.floorQ; uu[29] = S.floorDay; uf[30] = S.fadeFloor ? 1 : 0; uf[31] = 0;
   device.queue.writeBuffer(uniformBuf, 0, ub);
 
   const enc = device.createCommandEncoder();
@@ -824,6 +862,15 @@ function initUi() {
   $('gates').addEventListener('change', (e) => { S.showGates = e.target.checked; S.dirty = true; });
   $('showLabels').addEventListener('change', (e) => { S.showLabels = e.target.checked; S.dirty = true; });
   $('loop').addEventListener('change', (e) => { S.loop = e.target.checked; });
+  $('fadeFloor').addEventListener('change', (e) => { S.fadeFloor = e.target.checked; S.dirty = true; });
+  $('marks').innerHTML = EVENTS.map((ev) => {
+    const d = dayOfDate(ev.date);
+    return `<button type="button" data-day="${d}" style="left:${d / (S.D - 1) * 100}%" title="${esc(ev.title)}" aria-label="Jump to ${esc(ev.title)}"></button>`;
+  }).join('');
+  $('marks').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-day]');
+    if (b) { togglePlay(false); setDay(+b.dataset.day); }
+  });
   $('glow').addEventListener('input', (e) => { S.glow = +e.target.value; S.dirty = true; });
   $('reset').addEventListener('click', () => resetView(true));
   $('play').addEventListener('click', () => togglePlay());
@@ -871,6 +918,8 @@ async function main() {
   S.regionNames = meta.regions;
   LN_MIN = Math.log(meta.vmin);
   LN_SPAN = Math.log(meta.vmax) - LN_MIN;
+  S.floorQ = Math.round(1 + valueToN(FLOOR_VALUE) * 254);   // same rounding as build.php
+  S.floorDay = dayOfDate(EVENTS[0].date);
 
   const sums = meta.regions.map(() => [0, 0, 0, 0]);
   for (let i = 0; i < S.N; i++) {

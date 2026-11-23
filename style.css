@@ -51,6 +51,7 @@ h2 { font-size: 12px; margin: 0 0 6px; font-weight: 600; text-transform: upperca
 .muted { color: var(--muted); }
 .small { font-size: 11px; }
 .big { font-size: 20px; font-weight: 600; margin: 2px 0 6px; font-variant-numeric: tabular-nums; }
+.big .note { display: block; font-size: 11px; font-weight: 400; color: var(--muted); }
 
 input, select, button {
   font: inherit;
@@ -103,7 +104,18 @@ input[type=checkbox] { accent-color: var(--accent); vertical-align: -2px; }
 #play { width: 36px; height: 36px; font-size: 15px; flex: none; border-radius: 50%; }
 .date { width: 150px; flex: none; display: flex; flex-direction: column; }
 #date { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-#timeline { flex: 1; min-width: 0; }
+#timelineWrap { flex: 1; min-width: 0; position: relative; display: flex; align-items: center; }
+#timeline { flex: 1; min-width: 0; width: 100%; }
+/* Event ticks above the track; inset by about half a thumb so they line up with it. */
+#marks { position: absolute; left: 8px; right: 8px; top: -9px; height: 9px; pointer-events: none; }
+#marks button {
+  position: absolute; top: 0; width: 12px; height: 12px; margin-left: -6px; padding: 0;
+  border: 0; border-radius: 0; background: none; pointer-events: auto; cursor: pointer;
+}
+#marks button::after { content: ''; position: absolute; left: 5px; top: 1px; width: 2px; height: 8px; background: var(--accent); border-radius: 1px; }
+#marks button:hover::after { background: #fff; }
+#event { color: var(--accent); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#event:hover { text-decoration: underline; }
 .speed { display: flex; align-items: center; gap: 6px; flex: none; color: var(--muted); }
 .speed input { width: 90px; }
 #speedLabel { width: 72px; color: var(--text); font-variant-numeric: tabular-nums; }
@@ -147,7 +159,7 @@ input[type=checkbox] { accent-color: var(--accent); vertical-align: -2px; }
   #side:has(#info[hidden]) { display: none; }
   #legend { display: none; }
   #timebar { flex-wrap: wrap; gap: 8px; }
-  #timeline { order: 5; flex-basis: 100%; }
+  #timelineWrap { order: 5; flex-basis: 100%; }
   .date { width: auto; flex: 1; min-width: 0; }
   #gap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .speed label { display: none; }

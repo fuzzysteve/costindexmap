@@ -33,6 +33,7 @@ $dataVersion = $v('data/meta.bin');
     <label><input type="checkbox" id="gates" checked> Gates</label>
     <label><input type="checkbox" id="showLabels" checked> Labels</label>
     <label><input type="checkbox" id="loop"> Loop</label>
+    <label title="From the 2023-09-12 patch most quiet systems sit on the game's 0.14% minimum"><input type="checkbox" id="fadeFloor" checked> Fade 0.14%</label>
     <button type="button" id="reset" title="Reset view">Reset view</button>
   </div>
   <div class="row">
@@ -62,8 +63,12 @@ $dataVersion = $v('data/meta.bin');
   <div class="date">
     <span id="date">—</span>
     <span id="gap" class="muted small" hidden>no snapshot: previous day shown</span>
+    <a id="event" class="small" hidden target="_blank" rel="noopener"></a>
   </div>
-  <input type="range" id="timeline" min="0" max="0" step="1" value="0" aria-label="Date">
+  <div id="timelineWrap">
+    <input type="range" id="timeline" min="0" max="0" step="1" value="0" aria-label="Date">
+    <div id="marks"></div>
+  </div>
   <div class="speed">
     <label for="speed">Speed</label>
     <input type="range" id="speed" min="0" max="100" step="1" value="50">
@@ -75,6 +80,7 @@ $dataVersion = $v('data/meta.bin');
   <div id="legendBar"></div>
   <div id="legendTicks"></div>
   <div class="muted small">System cost index (log scale)</div>
+  <div class="muted small">Since 12 Sep 2023 the game's minimum is 0.14%</div>
 </div>
 
 <div id="status" role="status">Loading…</div>

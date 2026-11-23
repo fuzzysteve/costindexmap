@@ -11,6 +11,11 @@ Live at <https://www.fuzzwork.co.uk/costindexmap/>.
   or scrub the timeline.
 - Fly to any region or system from the search box. Clicking a system shows its
   full history; a side list shows the ten highest systems on the current day.
+- Since the [2023-09-12 patch](https://www.eveonline.com/news/view/patch-notes-version-21-05-2)
+  ("We have adjusted the System Cost Index formula to make it more volatile") the
+  game floors every index at 0.14%, and most quiet systems sit exactly there.
+  The map labels those values "game minimum", fades them by default (toggle
+  "Fade 0.14%"), and marks the date on the timeline.
 - Needs a browser with WebGPU (current Chrome/Edge/Safari, Firefox on Windows).
 
 ## Raw data
