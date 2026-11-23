@@ -1,0 +1,5 @@
+<?php
+// Copy to db.inc.php and fill in. build.php needs read access to the SDE
+// (eve.mapSolarSystems, eve.mapRegions, eve.mapSolarSystemJumps) and to
+// evesupport.costIndexArchive. The page itself never touches the database.
+$dbh = new PDO('mysql:host=localhost;dbname=eve', '<db-user>', '<db-password>');
