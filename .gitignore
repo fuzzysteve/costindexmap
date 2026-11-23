@@ -2,5 +2,3 @@
 data/
 # Local DB connection (see db.inc.php.example)
 db.inc.php
-# Server-specific maintainer notes (paths, backups); not for the public repo
-CLAUDE.md

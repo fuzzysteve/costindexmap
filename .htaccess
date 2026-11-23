@@ -2,11 +2,6 @@
 # straight to PHP-FPM). build.php guards itself (CLI only, 404 otherwise) and
 # db.inc.php produces no output.
 
-# Maintainer notes mention server paths; the README is public.
-<Files "CLAUDE.md">
-    Require all denied
-</Files>
-
 # Data files are already gzip-compressed (the page decompresses them itself),
 # and URLs are versioned by build time.
 <FilesMatch "\.bin$">

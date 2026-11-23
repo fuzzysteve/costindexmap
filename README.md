@@ -13,6 +13,14 @@ Live at <https://www.fuzzwork.co.uk/costindexmap/>.
   full history; a side list shows the ten highest systems on the current day.
 - Needs a browser with WebGPU (current Chrome/Edge/Safari, Firefox on Windows).
 
+## Raw data
+
+The map shows rounded values. The exact archive is exported every month as
+gzipped CSV at <https://www.fuzzwork.co.uk/dump/costindex/>: one file per
+calendar month (UTC) since July 2014, each with an MD5 checksum. Columns:
+`solarSystemID, activityID, costIndex, archiveTime`. A new file appears on the
+1st of each month, once the previous month is complete.
+
 ## Files
 
 | File | What it is |
